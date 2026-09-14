@@ -20,6 +20,7 @@ const path = require('path');
 const esbuild = require('esbuild');
 const { resolveCssBlocks } = require('./lib/inline-css.js');
 const { forceCleanCardContext } = require('./lib/release-flags.js');
+const { filterLocales } = require('./lib/filter-locales.js');
 
 const ENTRY = 'src/index.ts';
 const OUTDIR = 'dist';
@@ -27,17 +28,45 @@ const OUTDIR = 'dist';
 // committed source state (see scripts/lib/release-flags.js). Default (no
 // flag, "test" build): CARD_CONTEXT is left exactly as committed.
 const isProd = process.argv.includes('--prod');
+// --locales=en,fr keeps only those languages in the bundle ('en' always kept,
+// as the fallback). Omit for the normal all-languages build.
+const localesArg = process.argv.find((a) => a.startsWith('--locales='));
+const LOCALES = localesArg
+  ? localesArg
+      .slice('--locales='.length)
+      .split(',')
+      .map((l) => l.trim())
+      .filter(Boolean)
+  : null;
 // Filename suffix keeps a stray test build from ever being mistaken for (or
 // overwriting) the shipped prod one in dist/.
 const OUTFILE = isProd ? 'entity-progress-card.js' : 'entity-progress-card_dev.js';
 
-function main() {
-  let bundled = esbuild.buildSync({
+// Rewrites the generated translations module in memory when --locales is set.
+// An esbuild plugin rather than a file edit, so the committed source (and the
+// i18n validation that reads it) stays untouched.
+const localeFilterPlugin = {
+  name: 'locale-filter',
+  setup(build) {
+    build.onLoad({ filter: /src[\\/]utils[\\/]translations\.js$/ }, (args) => {
+      const source = fs.readFileSync(args.path, 'utf8');
+      const { code, kept, dropped } = filterLocales(source, LOCALES);
+      console.log(`   locales: kept ${kept.join(', ')} (dropped ${dropped})`);
+      return { contents: code, loader: 'js' };
+    });
+  },
+};
+
+async function main() {
+  // esbuild.build rather than buildSync: buildSync rejects plugins, and the
+  // locale filter is one.
+  let bundled = (await esbuild.build({
     entryPoints: [ENTRY],
     bundle: true,
     format: 'esm',
     write: false,
     minify: false,
+    plugins: LOCALES ? [localeFilterPlugin] : [],
     // Bake dev mode into the *_dev.js build itself (vs the shipped .js): the
     // URL can't be read when the bundle is loaded as an ES module (no
     // document.currentScript), so a filename/?dev=true signal alone would miss
@@ -49,7 +78,7 @@ function main() {
     // `.name`-based debug line (initLogger's per-class logger and
     // traceInstance's ?debug=instances counter).
     keepNames: true,
-  }).outputFiles[0].text;
+  })).outputFiles[0].text;
 
   if (isProd) bundled = forceCleanCardContext(bundled);
   const { src, minifiedCount } = resolveCssBlocks(bundled, isProd);
@@ -74,4 +103,7 @@ function main() {
   );
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
