@@ -69,7 +69,7 @@
     "js-yaml": "^5.2.2",
     "knip": "^6.33.0",
     "lint-staged": "^17.0.8",
-    "markdownlint-cli2": "^0.23.0",
+    "markdownlint-cli2": "^0.23.3",
     "prettier": "^3.9.5",
     "typescript": "^5.9.3"
   }
